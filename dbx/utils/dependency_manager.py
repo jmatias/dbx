@@ -2,6 +2,7 @@ import pathlib
 from typing import Optional, Dict, List, Union, Any
 
 from dbx.utils.common import dbx_echo, handle_package, get_package_file
+from pipfile import Pipfile
 
 # this type alias represents a library reference, for example:
 # {"whl": "path/to/some/file"}
@@ -46,8 +47,11 @@ class DependencyManager:
             requirements_path = pathlib.Path(requirements_file)
 
             if not requirements_path.exists():
-                dbx_echo("Requirements file was not found")
-                return []
+                parsed = Pipfile.load(filename="./Pipfile")
+                requirements_content = [f"{k}=={v}" for (k, v) in parsed.data['default'].items()]
+                filtered_libraries = self._delete_managed_libraries(requirements_content)
+                requirements_payload = [{"pypi": {"package": req}} for req in filtered_libraries if req]
+                return requirements_payload
             else:
                 requirements_content = requirements_path.read_text(encoding="utf-8").split("\n")
                 filtered_libraries = self._delete_managed_libraries(requirements_content)

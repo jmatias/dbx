@@ -4,6 +4,8 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+pipfile = "*"
+sphinx-autobuild = "==2021.3.14"
 
 [dev-packages]
 sphinx-rtd-theme = "*"

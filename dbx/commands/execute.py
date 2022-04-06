@@ -1,4 +1,5 @@
 import pathlib
+import tempfile
 import time
 from typing import Any, List, Optional
 
@@ -7,21 +8,13 @@ import mlflow
 from databricks_cli.clusters.api import ClusterService
 from databricks_cli.configure.config import debug_option
 from databricks_cli.utils import CONTEXT_SETTINGS
+from pipfile import Pipfile
 
 from dbx.commands.deploy import finalize_deployment_file_path
-from dbx.utils.adjuster import walk_content, adjust_path
-from dbx.utils.common import (
-    dbx_echo,
-    prepare_environment,
-    FileUploader,
-    ContextLockFile,
-    ApiV1Client,
-    environment_option,
-    get_deployment_config,
-    handle_package,
-    get_package_file,
-    _preprocess_cluster_args,
-)
+from dbx.utils.adjuster import adjust_path, walk_content
+from dbx.utils.common import (ApiV1Client, ContextLockFile, FileUploader, _preprocess_cluster_args, dbx_echo,
+                              environment_option, get_deployment_config, get_package_file, handle_package,
+                              prepare_environment)
 
 
 @click.command(
@@ -133,10 +126,31 @@ def execute(
             execute_command(v1_client, cluster_id, context_id, installation_command, verbose=False)
             dbx_echo("Provided requirements installed")
         else:
-            dbx_echo(
-                f"Requirements file {requirements_fp} is not provided"
-                + ", following the execution without any additional packages"
-            )
+            parsed = Pipfile.load(filename="./Pipfile")
+
+            def _generate_pkg_str(k, v):
+                if v == "*":
+                    return k
+                return f"{k}{v}"
+
+            requirements_content = [_generate_pkg_str(k, v) for (k, v) in parsed.data['default'].items()]
+            print(requirements_content)
+            with tempfile.NamedTemporaryFile() as tmp:
+                with open(tmp.name, 'w') as fh:
+                    for item in requirements_content:
+                        fh.write(f"{item}\n")
+                localized_requirements_path = file_uploader.upload_and_provide_path(pathlib.Path(tmp.name),
+                                                                                    as_fuse=True)
+
+                installation_command = f"%pip install -U -r {localized_requirements_path}"
+                dbx_echo("Installing generated requirements")
+                execute_command(v1_client, cluster_id, context_id, installation_command, verbose=False)
+                dbx_echo("generated requirements installed")
+
+            # dbx_echo(
+            #     f"Requirements file {requirements_fp} is not provided"
+            #     + ", following the execution without any additional packages"
+            # )
 
         if not no_package:
             package_file = get_package_file()
@@ -161,7 +175,6 @@ def execute(
         task_props: List[Any] = job_payload.get("spark_python_task").get("parameters", [])
 
         if task_props:
-
             def adjustment_callback(p: Any):
                 return adjust_path(p, file_uploader)
 
@@ -216,10 +229,10 @@ def wait_for_command_execution(v1_client: ApiV1Client, cluster_id: str, context_
 
 def execute_command(v1_client: ApiV1Client, cluster_id: str, context_id: str, command: str, verbose=True):
     payload = {
-        "language": "python",
+        "language":  "python",
         "clusterId": cluster_id,
         "contextId": context_id,
-        "command": command,
+        "command":   command,
     }
     command_execution_data = v1_client.execute_command(payload)
     command_id = command_execution_data["id"]

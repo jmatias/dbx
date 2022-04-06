@@ -12,10 +12,10 @@ SHELL=/bin/bash
 
 
 ##############################################################################
-PYTHON_VERSION=3.7.5
+PYTHON_VERSION=3.8.13
 VENV_NAME=.venv
 VENV_DIR=${VENV_NAME}
-PYTHON=${VENV_DIR}/bin/python
+#PYTHON=${VENV_DIR}/bin/python
 SPHINX_AUTOBUILD=${VENV_DIR}/bin/sphinx-autobuild
 SPHINX_BUILD=${VENV_DIR}/bin/sphinx-build
 ##############################################################################

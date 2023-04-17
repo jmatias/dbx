@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import git
@@ -26,11 +25,11 @@ def transfer_profile_name(info: EnvironmentInfo):
         dbx_echo(f"Using profile provided via the env variable {ProfileEnvConfigProvider.DBX_PROFILE_ENV}")
 
 
-def prepare_environment(env_name: str) -> ApiClient:
+def prepare_environment(env_name: str, headers: Optional[Dict[str, str]] = None) -> ApiClient:
     info = ProjectConfigurationManager().get(env_name)
     transfer_profile_name(info)
     MlflowStorageConfigurationManager.prepare(info)
-    return DatabricksClientProvider.get_v2_client()
+    return DatabricksClientProvider.get_v2_client(headers)
 
 
 def generate_filter_string(env: str, branch_name: Optional[str]) -> str:
@@ -50,19 +49,6 @@ def generate_filter_string(env: str, branch_name: Optional[str]) -> str:
 
 def get_environment_data(environment: str) -> EnvironmentInfo:
     return ProjectConfigurationManager().get(environment)
-
-
-def get_package_file() -> Optional[Path]:
-    dbx_echo("Locating package file")
-    file_locator = list(Path("dist").glob("*.whl"))
-    sorted_locator = sorted(file_locator, key=os.path.getmtime)  # get latest modified file, aka latest package version
-    if sorted_locator:
-        file_path = sorted_locator[-1]
-        dbx_echo(f"Package file located in: {file_path}")
-        return file_path
-    else:
-        dbx_echo("Package file was not found")
-        return None
 
 
 def get_current_branch_name() -> Optional[str]:

@@ -1,4 +1,5 @@
 import click
+import typer
 import typer.rich_utils
 from rich.traceback import install
 
@@ -16,12 +17,12 @@ install(suppress=[click])
 
 typer.rich_utils._get_help_text = _get_custom_help_text
 
-app = typer.Typer(rich_markup_mode="markdown")
+app = typer.Typer(rich_markup_mode="markdown", pretty_exceptions_show_locals=False)
 
 app.callback(
     name="dbx",
     help="""
-    🧱Databricks eXtensions aka dbx. Please find the main docs page [here](https://dbx.readthedocs.io/).
+    🧱 Databricks eXtensions aka dbx. Please find the main docs page [here](https://dbx.readthedocs.io/).
 """,
 )(version_entrypoint)
 
@@ -96,7 +97,15 @@ app.command(
        ℹ️ In some cases (e.g. when Git head is `DETACHED`), we won't be able to identity the branch name.<br/>
        Please use `--tags` and `--branch-name` options if you notice that workflow definitions are inconsistent.
 
-    9. If `--write-specs-to-file` option is provided, writes the final workload definition into a given file.""",
+    9. If `--write-specs-to-file` option is provided, writes the final workload definition into a given file.
+    
+    10. If option `--header <TEXT>` or `-H <TEXT>` is provided, parses contents of <TEXT> as a key-value pair and
+        appends it to the headers for the API calls.<br/>
+        Examples:
+        ```
+        dbx deploy [OPTIONS] --header name1=value1 --header name2=value2
+        dbx deploy [OPTIONS] -H name1=value1 -H name2=value2
+        ```""",
 )(deploy)
 
 app.command(
@@ -123,7 +132,13 @@ app.command(
     5. Code will be executed in a separate context. Other users can work with the same package
        on the same cluster without any limitations or overlapping.
     6. Execution results will be printed out in the shell. If result was an error, command will have error exit code.
-    """,
+    7. If option `--header <TEXT>` or `-H <TEXT>` is provided, parses contents of <TEXT> as a key-value pair and
+       appends it to the headers for the API calls.<br/>
+       Examples:
+       ```
+       dbx execute [OPTIONS] --header name1=value1 --header name2=value2
+       dbx execute [OPTIONS] -H name1=value1 -H name2=value2
+       ```""",
 )(execute)
 
 app.command(short_help="💎 Generates new project from the template.", help="💎 Generates new project from the template.")(
@@ -164,7 +179,16 @@ app.command(
     When `dbx launch` is running without `--from-assets` option,
     it will simply find the job by it's name and start a new job run.
     In this case `dbx launch` will use
-    the [Jobs RunNow API](https://docs.databricks.com/dev-tools/api/latest/jobs.html#operation/JobsRunNow).""",
+    the [Jobs RunNow API](https://docs.databricks.com/dev-tools/api/latest/jobs.html#operation/JobsRunNow).
+    
+
+    If option `--header <TEXT>` or `-H <TEXT>` is provided, parses contents of <TEXT> as a key-value pair and
+    appends it to the headers for the API calls.<br/>
+    Examples:
+    ```
+    dbx launch [OPTIONS] --header name1=value1 --header name2=value2
+    dbx launch [OPTIONS] -H name1=value1 -H name2=value2
+    ```""",
 )(launch)
 
 app.add_typer(
@@ -176,12 +200,22 @@ app.command(
     short_help="🚮 Delete defined workflows and relevant assets.",
     help="""🚮 Delete defined workflows and relevant assets.
 
-    🚨 If neither workflow argument not `--workflows` option are provided,
-    will destroy **all** workflows defined in the deployment file.""",
+    🚨 If neither workflow argument nor `--workflows` option are provided,
+    will destroy **all** workflows defined in the deployment file.
+    
+    If option `--header <TEXT>` or `-H <TEXT>` is provided, parses contents of <TEXT> as a key-value pair and
+    appends it to the headers for the API calls.<br/>
+    Examples:
+    ```
+    dbx destroy [OPTIONS] --header name1=value1 --header name2=value2
+    dbx destroy [OPTIONS] -H name1=value1 -H name2=value2
+    ```""",
     name="destroy",
 )(destroy)
 
 
+# click app object here is used in the mkdocs.
+# Don't delete it!
 def get_click_app():
     return typer.main.get_command(app)
 

@@ -1,24 +1,18 @@
 import shutil
+import textwrap
 from pathlib import Path
-from unittest.mock import Mock, MagicMock
+from unittest.mock import MagicMock, patch
 
-import mlflow
 import pytest
 import yaml
-from databricks_cli.sdk import ApiClient, JobsService
-from requests import HTTPError
+from pytest_mock import MockerFixture
 
 from dbx.api.config_reader import ConfigReader
-from dbx.api.configure import ProjectConfigurationManager, EnvironmentInfo
+from dbx.api.configure import EnvironmentInfo, ProjectConfigurationManager
+from dbx.api.services.jobs import NamedJobsService
 from dbx.api.storage.mlflow_based import MlflowStorageConfigurationManager
-from dbx.commands.deploy import (  # noqa
-    _create_job,
-    _log_dbx_file,
-    _preprocess_jobs,
-    _update_job,
-    deploy,
-)
-from dbx.models.project import MlflowStorageProperties
+from dbx.commands import deploy
+from dbx.models.files.project import MlflowStorageProperties
 from dbx.utils.json import JsonUtils
 from tests.unit.conftest import (
     get_path_with_relation_to_current_file,
@@ -26,26 +20,40 @@ from tests.unit.conftest import (
 )
 
 
-def test_deploy_smoke_default(temp_project: Path, mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client):
+def test_deploy_smoke_default(temp_project: Path, mlflow_file_uploader, mock_storage_io, mock_api_v2_client):
     deploy_result = invoke_cli_runner("deploy")
     assert deploy_result.exit_code == 0
 
 
-def test_deploy_files_only_smoke_default(
-    temp_project: Path, mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client
-):
-    deploy_result = invoke_cli_runner(["deploy", "--files-only"])
-    assert deploy_result.exit_code == 0
-
-
+@pytest.mark.parametrize("argset", [["--files-only"], ["--assets-only"], ["--no-rebuild"]])
 def test_deploy_assets_only_smoke_default(
-    temp_project: Path, mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client
+    argset, temp_project: Path, mlflow_file_uploader, mock_storage_io, mock_api_v2_client
 ):
-    deploy_result = invoke_cli_runner(["deploy", "--assets-only"])
+    deploy_result = invoke_cli_runner(["deploy"] + argset)
     assert deploy_result.exit_code == 0
 
 
-def test_deploy_multitask_smoke(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project):
+def test_deploy_assets_pipeline(temp_project: Path, mlflow_file_uploader, mock_storage_io, mock_api_v2_client):
+    (temp_project / "conf" / "deployment.yml").write_text(
+        """
+    environments:
+      default:
+        workflows:
+          - name: "pipe"
+            workflow_type: "pipeline"
+            libraries:
+              - notebook:
+                  path: "/some/path"
+    """
+    )
+    deploy_result = invoke_cli_runner(["deploy", "--assets-only"], expected_error=True)
+    assert "not supported for DLT pipelines" in str(deploy_result.exception)
+
+
+def test_deploy_multitask_smoke(
+    mlflow_file_uploader, mocker: MockerFixture, mock_storage_io, mock_api_v2_client, temp_project
+):
+    mocker.patch.object(NamedJobsService, "create", MagicMock(return_value=1))
     samples_path = get_path_with_relation_to_current_file("../deployment-configs/")
     for file_name in ["03-multitask-job.json", "03-multitask-job.yaml"]:
         deployment_file = Path("./conf/") / file_name
@@ -66,11 +74,12 @@ def test_deploy_multitask_smoke(mlflow_file_uploader, mock_dbx_file_upload, mock
         )
         assert deploy_result.exit_code == 0
         _content = JsonUtils.read(Path(".dbx/deployment-result.json"))
-        assert "libraries" not in _content["default"]["jobs"][0]
-        assert "libraries" in _content["default"]["jobs"][0]["tasks"][0]
+        assert "libraries" not in _content["default"]["workflows"][0]
+        assert "libraries" in _content["default"]["workflows"][0]["tasks"][0]
 
 
-def test_deploy_path_adjustment_json(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project):
+def test_deploy_path_adjustment_json(mlflow_file_uploader, mocker, mock_storage_io, mock_api_v2_client, temp_project):
+    mocker.patch.object(NamedJobsService, "create", MagicMock(return_value=1))
     samples_path = get_path_with_relation_to_current_file("../deployment-configs/")
     for file_name in ["04-path-adjustment-policy.json", "04-path-adjustment-policy.yaml"]:
         deployment_file = Path("./conf/") / file_name
@@ -91,10 +100,11 @@ def test_deploy_path_adjustment_json(mlflow_file_uploader, mock_dbx_file_upload,
             ],
         )
         _content = JsonUtils.read(Path(".dbx/deployment-result.json"))
-        expected_prefix = mlflow.get_tracking_uri()
-        assert _content["default"]["jobs"][0]["libraries"][0]["whl"].startswith(expected_prefix)
-        assert _content["default"]["jobs"][0]["spark_python_task"]["python_file"].startswith(expected_prefix)
-        assert _content["default"]["jobs"][0]["spark_python_task"]["parameters"][0].startswith(expected_prefix)
+        expected_prefix = "dbfs:/mocks/testing"
+
+        assert _content["default"]["workflows"][0]["libraries"][0]["whl"].startswith(expected_prefix)
+        assert _content["default"]["workflows"][0]["spark_python_task"]["python_file"].startswith(expected_prefix)
+        assert _content["default"]["workflows"][0]["spark_python_task"]["parameters"][0].startswith("/dbfs/")
 
         assert deploy_result.exit_code == 0
 
@@ -133,46 +143,39 @@ def test_non_existent_env(mock_api_v2_client, temp_project):
     assert "not found in the deployment file" in str(deploy_result.exception)
 
 
-def test_deploy_only_chosen_workflow(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project):
+def test_deploy_only_chosen_workflow(mlflow_file_uploader, mocker, mock_storage_io, mock_api_v2_client, temp_project):
+    mocker.patch.object(NamedJobsService, "create", MagicMock(return_value=1))
     result_file = ".dbx/deployment-result.json"
     deployment_info = ConfigReader(Path("conf/deployment.yml")).get_environment("default")
-    _chosen = [j["name"] for j in deployment_info.payload.workflows][0]
+    _chosen = deployment_info.payload.workflow_names[0]
     deploy_result = invoke_cli_runner(
         ["deploy", "--environment=default", f"--write-specs-to-file={result_file}", _chosen],
     )
     assert deploy_result.exit_code == 0
     _content = JsonUtils.read(Path(result_file))
-    assert _chosen in [j["name"] for j in _content["default"]["jobs"]]
+    assert [w["name"] for w in _content["default"]["workflows"]] == [_chosen]
 
 
-def test_deploy_only_chosen_jobs(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project):
+@pytest.mark.parametrize("workflow_arg", ["--workflows", "--jobs"])
+def test_deploy_only_chosen(
+    workflow_arg, mlflow_file_uploader, mocker, mock_storage_io, mock_api_v2_client, temp_project
+):
+    mocker.patch.object(NamedJobsService, "create", MagicMock(return_value=1))
     result_file = ".dbx/deployment-result.json"
     deployment_info = ConfigReader(Path("conf/deployment.yml")).get_environment("default")
-    _chosen = [j["name"] for j in deployment_info.payload.workflows][:2]
+    _chosen = deployment_info.payload.workflow_names[:2]
     deploy_result = invoke_cli_runner(
-        ["deploy", "--environment", "default", "--jobs", ",".join(_chosen), "--write-specs-to-file", result_file],
+        ["deploy", "--environment", "default", workflow_arg, ",".join(_chosen), "--write-specs-to-file", result_file],
     )
     assert deploy_result.exit_code == 0
     _content = JsonUtils.read(Path(result_file))
-    assert _chosen == [j["name"] for j in _content["default"]["jobs"]]
+    assert [w["name"] for w in _content["default"]["workflows"]] == _chosen
 
 
-def test_deploy_only_chosen_workflows(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project):
+def test_negative_both_arguments(mlflow_file_uploader, mock_storage_io, mock_api_v2_client, temp_project):
     result_file = ".dbx/deployment-result.json"
     deployment_info = ConfigReader(Path("conf/deployment.yml")).get_environment("default")
-    _chosen = [j["name"] for j in deployment_info.payload.workflows][:2]
-    deploy_result = invoke_cli_runner(
-        ["deploy", "--environment", "default", "--workflows", ",".join(_chosen), "--write-specs-to-file", result_file],
-    )
-    assert deploy_result.exit_code == 0
-    _content = JsonUtils.read(Path(result_file))
-    assert _chosen == [j["name"] for j in _content["default"]["jobs"]]
-
-
-def test_negative_both_arguments(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project):
-    result_file = ".dbx/deployment-result.json"
-    deployment_info = ConfigReader(Path("conf/deployment.yml")).get_environment("default")
-    _chosen = [j["name"] for j in deployment_info.payload.workflows][:2]
+    _chosen = deployment_info.payload.workflow_names[0]
     deploy_result = invoke_cli_runner(
         [
             "deploy",
@@ -190,9 +193,7 @@ def test_negative_both_arguments(mlflow_file_uploader, mock_dbx_file_upload, moc
     assert "cannot be provided together" in str(deploy_result.exception)
 
 
-def test_deploy_with_requirements_and_branch(
-    mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project
-):
+def test_deploy_with_requirements_and_branch(mlflow_file_uploader, mock_storage_io, mock_api_v2_client, temp_project):
     sample_requirements = "\n".join(["pyspark==3.0.0", "xgboost==0.6.0", "pyspark3d"])
     Path("runtime_requirements.txt").write_text(sample_requirements)
 
@@ -214,31 +215,8 @@ def test_deploy_with_requirements_and_branch(
     assert deploy_result.exit_code == 0
 
 
-def test_smoke_update_job_positive():
-    js = Mock(JobsService)
-    _update_job(js, "aa-bbb-ccc-111", {"name": 1})
-
-
-def test_smoke_update_job_negative():
-    js = Mock(JobsService)
-    js.reset_job.side_effect = Mock(side_effect=HTTPError())
-    with pytest.raises(HTTPError):
-        _update_job(js, "aa-bbb-ccc-111", {"name": 1})
-
-
-def test_create_job_with_error():
-    client = Mock(ApiClient)
-    client.perform_query.side_effect = Mock(side_effect=HTTPError())
-    with pytest.raises(HTTPError):
-        _create_job(client, {"name": "some-job"})
-
-
-def test_preprocess_jobs():
-    with pytest.raises(Exception):
-        _preprocess_jobs([], ["some-job-name"])
-
-
-def test_with_permissions(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project):
+def test_with_permissions(mocker, mlflow_file_uploader, mock_storage_io, mock_api_v2_client, temp_project):
+    mocker.patch.object(NamedJobsService, "create", MagicMock(return_value=1))
     deployment_file = Path("conf/deployment.yml")
     deploy_content = yaml.safe_load(deployment_file.read_text())
 
@@ -261,7 +239,7 @@ def test_with_permissions(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v
     assert deploy_result.exit_code == 0
 
 
-def test_jinja_custom_path(mlflow_file_uploader, mock_dbx_file_upload, mock_api_v2_client, temp_project: Path):
+def test_jinja_custom_path(mlflow_file_uploader, mock_storage_io, mock_api_v2_client, temp_project: Path):
     samples_path = get_path_with_relation_to_current_file("../deployment-configs/")
     nested_config_dir = samples_path / "nested-configs"
     shutil.copytree(nested_config_dir, temp_project.parent / "configs")
@@ -271,14 +249,58 @@ def test_jinja_custom_path(mlflow_file_uploader, mock_dbx_file_upload, mock_api_
     assert deploy_result.exit_code == 0
 
 
-def test_update_job_v21_with_permissions():
-    _client = MagicMock(spec=ApiClient)
-    _jobs_service = JobsService(_client)
-    acl_definition = {"access_control_list": [{"user_name": "test@user.com", "permission_level": "IS_OWNER"}]}
-    job_definition = {
-        "name": "test",
-    }
-    job_definition.update(acl_definition)  # noqa
+def test_deploy_empty_workflows_list(temp_project, mlflow_file_uploader, mock_storage_io, mock_api_v2_client):
+    payload = textwrap.dedent(
+        """\
+    environments:
+      default:
+        workflows: []
+    """
+    )
+    Path("conf/deployment.yml").write_text(payload)
+    deploy_result = invoke_cli_runner("deploy")
+    assert deploy_result.exit_code == 0
 
-    _update_job(_jobs_service, "1", job_definition)
-    _client.perform_query.assert_called_with("PUT", "/permissions/jobs/1", data=acl_definition)
+
+@patch(f"{deploy.__name__}.CorePackageManager")
+@patch(f"{deploy.__name__}.BuildProperties")
+def test_deploy_with_no_package(
+    mock_build_properties,
+    mock_core_package_manager,
+    mlflow_file_uploader,
+    mocker,
+    mock_storage_io,
+    mock_api_v2_client,
+    temp_project,
+):
+    mocker.patch.object(NamedJobsService, "create", MagicMock(return_value=1))
+    result_file = ".dbx/deployment-result.json"
+    _ = ConfigReader(Path("conf/deployment.yml")).get_environment("default")
+    deploy_result = invoke_cli_runner(
+        ["deploy", "--environment", "default", "--no-package", "--write-specs-to-file", result_file],
+    )
+    assert deploy_result.exit_code == 0
+    mock_build_properties.assert_called_once_with(potential_build=True, no_rebuild=True)
+    mock_core_package_manager.assert_not_called()
+    _content = JsonUtils.read(Path(result_file))
+    assert not any([t["libraries"] for w in _content["default"]["workflows"] for t in w["tasks"]])
+
+
+@pytest.mark.usefixtures("temp_project", "mlflow_file_uploader", "mock_storage_io", "mock_api_v2_client")
+def test_deploy_additional_headers(mocker: MockerFixture):
+    expected_headers = {
+        "azure_sp_token": "eyJhbAAAABBBB",
+        "workspace_id": (
+            "/subscriptions/bc5bAAA-BBBB/resourceGroups/some-resource-group"
+            "/providers/Microsoft.Databricks/workspaces/target-dtb-ws"
+        ),
+        "org_id": "1928374655647382",
+    }
+    env_mock = mocker.patch("dbx.commands.deploy.prepare_environment", MagicMock())
+    header_parse_mock = mocker.patch("dbx.commands.deploy.parse_multiple", wraps=deploy.parse_multiple)
+    kwargs = [f"{key}={val}" for key, val in expected_headers.items()]
+    cli_kwargs = " ".join([f"--header {kw}" for kw in kwargs])
+    deploy_result = invoke_cli_runner(f"deploy {cli_kwargs}")
+    assert deploy_result.exit_code == 0
+    header_parse_mock.assert_any_call(kwargs)
+    env_mock.assert_called_once_with("default", expected_headers)

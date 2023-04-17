@@ -46,7 +46,7 @@ Therefore, with `dbx` we recommend using all-purpose clusters in the following c
 !!! danger ":material-language-java: JVM projects might lead to undefined behaviour when launched as a workflow on all-purpose clusters"
 
     Same reasoning as described for Python package-based projects is applied to JVM-based projects.
-    Due to the library reinstallation issues, it's also not possible to run JVM-based projects from IDE on interactive clusters with `dbx`.<br/>
+    Due to the library reinstallation issues, it's also not possible to run JVM-based projects from IDE on all-purpose clusters with `dbx`.<br/>
     For such cases, please use the development loop described in [this doc](../guides/jvm/jvm_devloop.md).
 
 ## :octicons-zap-16: Job clusters
@@ -64,9 +64,14 @@ All settings of a job cluster for each specific workflow and task inside this wo
 
 !!! tip "Cluster Reuse in Databricks Jobs"
 
-    Databricks jobs with Jobs API v2.1 support [Cluster Reuse](https://www.databricks.com/blog/2022/02/04/saving-time-and-costs-with-cluster-reuse-in-databricks-jobs.html) feature.
+    Databricks jobs with Jobs API v2.1 supports the [Cluster Reuse](https://www.databricks.com/blog/2022/02/04/saving-time-and-costs-with-cluster-reuse-in-databricks-jobs.html) feature.
     This feature allows tasks to reuse the same cluster, which greatly reduces the overall job execution time.<br/>
-    :warning: Cluster Reuse feature is not supported in [assets-based workflow launches](../features/assets.md).
+
+!!! tip "Cluster Reuse in assets-based launches"
+
+    Since Cluster Reuse feature is not supported in [assets-based launch](../features/assets.md), you can add a failsafe switch to automatically generate new clusters.<br/>
+    In this case a separate job cluster will be created for each task when `dbx launch --from-assets` is used.
+    Please read more on this functionality [assets-based launch](../features/assets.md#failsafe-behaviour-for-shared-job-clusters).
 
 !!! tip "Using instance pools"
 
@@ -88,6 +93,6 @@ To sum up the cases and potential choices for :material-lightning-bolt-circle: a
     * Use **all-purpose cluster** for development loop. Synchronize local files to Repo with Notebooks via [`dbx sync repo`](../reference/cli.md#dbx-sync-repo) as [described here](../guides/python/devloop/mixed.md).
     * Use **job clusters** and `dbx deploy` together with `dbx launch` for automated workflows as [described here](../guides/python/devops/mixed.md).
 * Developing a :material-language-java: JVM-based project in IDE?
-    * Use local tests and **job clusters** with [:fontawesome-solid-microchip: instance pools](https://docs.databricks.com/clusters/instance-pools/index.html) for development loop as [described here](../guides/jvm/jvm_devloop.md)
+    * Use local tests and **job clusters** with [:fontawesome-solid-microchip: instance pools](https://docs.databricks.com/clusters/instance-pools/index.html) for development loop as [described here](../guides/jvm/jvm_devloop.md).
     * Use **job clusters** and `dbx deploy` together with `dbx launch` for automated workflows as [described here](../guides/jvm/jvm_devops.md).
 

@@ -1,6 +1,6 @@
 # :material-language-python: :material-airplane-takeoff: Python quickstart
 
-In this guide we're going to walkthough a typical setup for development purposes.
+In this guide we're going to walk through a typical setup for development purposes.
 
 In the end of this guide you'll have a prepared local environment, as well as capabilities to:
 
@@ -8,11 +8,11 @@ In the end of this guide you'll have a prepared local environment, as well as ca
 * Deploy workflows to Databricks
 * Launch workflows on the Databricks platform
 
-!!! tip
+!!! tip "Other CI and Git providers"
 
     Although this example is based on [GitHub](https://github.com/) and [GitHub Actions](https://github.com/features/actions),
-    `dbx` can be easily and seamlessly used with any CI provider and any Git provider.
-    The built-in Python template also can generate pipelines for Azure DevOps and GitLab.
+    `dbx` can be easily and seamlessly used with any CI provider and any Git provider.<br/>
+    The built-in Python template also can generate pipelines for [Azure DevOps](https://azure.microsoft.com/en-us/products/devops/) and [GitLab CI](https://docs.gitlab.com/ee/ci/).
 
 ## :fontawesome-solid-list-check: Prerequisites
 
@@ -64,13 +64,29 @@ databricks --profile charming-aurora workspace ls /
 Now the preparation is done, let’s generate a project skeleton using [`dbx init`](../../reference/cli.md):
 
 ```bash
-dbx init -p \
-    "cicd_tool=GitHub Actions" \
+dbx init \
+    -p "cicd_tool=GitHub Actions" \
     -p "cloud=<your-cloud>" \
     -p "project_name=charming-aurora" \
     -p "profile=charming-aurora" \
     --no-input
 ```
+
+!!! warning "Choosing the artifact storage wisely"
+
+    Although for the quickstart we're using the standard `dbfs://`-based artifact location, it's **strictly recommended** to use
+    proper cloud-based storage for artifacts. Please read more in [this section](../../concepts/artifact_storage.md).
+
+    To change the artifact location for this specific guide, add the following parameter to the command above:
+    ```bash
+    dbx init \
+    -p "cicd_tool=GitHub Actions" \
+    -p "cloud=<your-cloud>" \
+    -p "project_name=charming-aurora" \
+    -p "profile=charming-aurora" \
+    -p "artifact_location=<s3://some/path OR wasbs://some/path OR gs://some/path>"
+    --no-input
+    ```
 
 Step into the newly generated folder:
 
@@ -84,7 +100,24 @@ Install dependencies for local environment:
 pip install -e ".[local,test]"
 ```
 
-Run local unit tests:
+???- info ":fontawesome-brands-windows: Windows-specific local configurations"
+
+    In some setup cases on the Windows machines you might run into various issues. Here is a quick writeup on how to handle some of them:
+
+    1. Abscence of `winutils.exe`. This error will be visible in the output as follows:
+    ```
+    WARN Shell: Did not find winutils.exe: java.io.FileNotFoundException
+    ```
+    An additional message about HADOOP_HOME not being defined also appears.
+    In case if you're running into this, please install winutils as described [here](https://github.com/cdarlint/winutils).
+
+    2. Issues with pyspark worker communication:
+    ```
+    Python worker failed to connect back
+    ```
+    Use the [`findspark`](https://github.com/minrk/findspark) package in your local unit tests to correctly identify Apache Spark on the local path.
+
+After installing all the dependencies, it's time to run local unit tests:
 
 ```bash
 pytest tests/unit --cov
@@ -104,9 +137,9 @@ charming_aurora/tasks/sample_ml_task.py       38      0      0      0   100%
 TOTAL                                         55      0      0      0   100%
 ```
 
-Tada! :partying_face: 🎉. Your first project has been created and successfully tested.
+Tada! :partying_face:. Your first project has been created and successfully tested 🎉.
 
-Now let's dig deeper into the project structure.
+Since we have the package installed and tests running, let's take a closer look at the project structure.
 
 ## :material-family-tree: Project structure
 
@@ -256,7 +289,7 @@ Please note that in local tests `self.dbutils` ([DBUtils](https://docs.databrick
 
 Now you can edit the code of this task to any extent.
 
-## :material-cog-play: Running tests
+## :material-cog-play: Running unit tests
 
 Take a look at the following file:
 ```python title="tests/unit/sample_test.py"
@@ -334,7 +367,7 @@ With the example above we're now able to run the unit tests and see how good our
 
 ## :fontawesome-solid-flask-vial: Running integration tests
 
-To run integration tests on the Databricks clusters, take a look at the `tests/integration` section.
+To run integration tests on the Databricks clusters, take a look [here](./integration_tests.md).
 
 ## :material-file-code: Deployment configuration
 
@@ -438,7 +471,7 @@ All-purpose clusters are an excellent choice for interactive workloads (and they
 
 To execute the code of the ETL task on the all-purpose cluster, do the following:
 ```bash
-dbx execute charming-aurora-sample-etl --task=etl --cluster-name="some-interactive-cluster-name"
+dbx execute charming-aurora-sample-etl --task=main --cluster-name="some-interactive-cluster-name"
 ```
 
 !!! tip
@@ -464,7 +497,7 @@ The reason is that `self.logger` logs it's content to the Driver Logs, which is 
     or to specialized logging solutions like [Datadog](https://www.datadoghq.com/) and [New Relic](https://newrelic.com/).
 
 
-With a successfully executed code on the interactive cluster, we can now move on to the deployment and launch.
+With a successfully executed code on the all-purpose cluster, we can now move on to the deployment and launch.
 
 ## :material-door-open: Defining the entrypoints
 
@@ -543,12 +576,12 @@ You can add `--trace` flag to keep the current shell busy until the Job Run is f
 
 With this guide we've done the following:
 
-* Local development environment is fully prepared
-* Unit tests were launched and code coverage was verified
-* Workflow definition was provided in the deployment file
-* Based on this definition, a task was executed on an all-purpose cluster
-* Based on this definition a new Databricks Job has been created
-* This Databricks Job has been successfully launched
+- [x] Local development environment is fully prepared
+- [x] Unit tests were launched and code coverage was verified
+- [x] Workflow definition was provided in the deployment file
+- [x] Based on this definition, a task was executed on an all-purpose cluster
+- [x] Based on this definition a new Databricks workflow has been created
+- [x] This Databricks workflow has been successfully launched
 
 Congratulations 🎉! Now you can easily develop new IDE-based projects with `dbx`.
 

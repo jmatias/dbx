@@ -1,46 +1,37 @@
+from unittest.mock import MagicMock
+
 import pytest
+from databricks_cli.sdk import JobsService, ApiClient
+from pytest_mock import MockerFixture
 
-from dbx.api.launch.runners import RunSubmitLauncher
-from dbx.models.parameters.run_submit import RunSubmitV2d0ParamInfo, RunSubmitV2d1ParamInfo
-
-
-def test_v2d0_parameter_override_negative():
-    spec = {"spark_python_task": {"parameters": ["a"]}}
-    parameters = RunSubmitV2d0ParamInfo(notebook_task={"base_parameters": {"a": 1}})
-    with pytest.raises(ValueError):
-        RunSubmitLauncher.override_v2d0_parameters(spec, parameters)
+from dbx.api.launch.runners.standard import StandardLauncher
+from dbx.api.services.jobs import NamedJobsService
+from dbx.models.cli.options import ExistingRunsOption
 
 
-def test_v2d0_parameter_override_positive():
-    spec = {"spark_python_task": {"parameters": ["a"]}}
-    parameters = RunSubmitV2d0ParamInfo(spark_python_task={"parameters": ["b"]})
-    RunSubmitLauncher.override_v2d0_parameters(spec, parameters)
-    assert spec["spark_python_task"]["parameters"] == ["b"]
+def test_not_found(mocker: MockerFixture):
+    mocker.patch.object(NamedJobsService, "find_by_name", MagicMock(return_value=None))
+    launcher = StandardLauncher("non-existent", api_client=MagicMock(), existing_runs=ExistingRunsOption.pass_)
+    with pytest.raises(Exception):
+        launcher.launch()
 
 
-def test_vd21_parameter_override_no_tasks():
-    spec = {"a": "b"}
-    parameters = RunSubmitV2d1ParamInfo(tasks=[{"task_key": "first", "spark_python_task": {"parameters": ["a"]}}])
-    with pytest.raises(ValueError):
-        RunSubmitLauncher.override_v2d1_parameters(spec, parameters)
+@pytest.mark.parametrize(
+    "behaviour, msg",
+    [
+        (ExistingRunsOption.pass_, "Passing the existing"),
+        (ExistingRunsOption.wait, "Waiting for job run"),
+        (ExistingRunsOption.cancel, "Cancelling run"),
+    ],
+)
+def test_with_behaviours(behaviour, msg, mocker: MockerFixture, capsys):
+    mocker.patch("dbx.api.launch.runners.standard.wait_run", MagicMock())
+    mocker.patch("dbx.api.launch.runners.standard.cancel_run", MagicMock())
+    client = MagicMock()
+    client.perform_query = MagicMock(return_value={"run_id": 1})
+    mocker.patch.object(NamedJobsService, "find_by_name", MagicMock(return_value=1))
+    mocker.patch.object(JobsService, "list_runs", MagicMock(return_value={"runs": [{"run_id": 1}]}))
 
-
-def test_vd21_parameter_override_no_task_key():
-    spec = {"tasks": [{"task_key": "this", "spark_python_task": {"parameters": ["a"]}}]}
-    parameters = RunSubmitV2d1ParamInfo(tasks=[{"task_key": "that", "spark_python_task": {"parameters": ["a"]}}])
-    with pytest.raises(ValueError):
-        RunSubmitLauncher.override_v2d1_parameters(spec, parameters)
-
-
-def test_vd21_parameter_override_incorrect_type():
-    spec = {"tasks": [{"task_key": "this", "python_wheel_task": {"parameters": ["a"]}}]}
-    parameters = RunSubmitV2d1ParamInfo(tasks=[{"task_key": "this", "spark_python_task": {"parameters": ["a"]}}])
-    with pytest.raises(ValueError):
-        RunSubmitLauncher.override_v2d1_parameters(spec, parameters)
-
-
-def test_vd21_parameter_override_positive():
-    spec = {"tasks": [{"task_key": "this", "python_wheel_task": {"parameters": ["a"]}}]}
-    parameters = RunSubmitV2d1ParamInfo(tasks=[{"task_key": "this", "python_wheel_task": {"parameters": ["b"]}}])
-    RunSubmitLauncher.override_v2d1_parameters(spec, parameters)
-    assert spec["tasks"][0]["python_wheel_task"]["parameters"] == ["b"]
+    launcher = StandardLauncher("non-existent", api_client=client, existing_runs=behaviour)
+    launcher.launch()
+    assert msg in capsys.readouterr().out
